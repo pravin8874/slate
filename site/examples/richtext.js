@@ -11,7 +11,7 @@ import {
   useSelected,
   useFocused,
 } from 'slate-react'
-import { Editor, Transforms, createEditor } from 'slate'
+import { Transforms, Editor, Range, createEditor } from 'slate'
 import { withHistory } from 'slate-history'
 import { css } from 'emotion'
 
@@ -31,7 +31,7 @@ const RichTextExample = () => {
   const renderElement = useCallback(props => <Element {...props} />, [])
   const renderLeaf = useCallback(props => <Leaf {...props} />, [])
   const editor = useMemo(
-    () => withImages(withHistory(withReact(createEditor()))),
+    () => withAction(withHistory(withReact(createEditor()))),
     []
   )
   // eslint-disable-next-line no-console
@@ -48,7 +48,8 @@ const RichTextExample = () => {
         <BlockButton format="block-quote" icon="format_quote" />
         <BlockButton format="numbered-list" icon="format_list_numbered" />
         <BlockButton format="bulleted-list" icon="format_list_bulleted" />
-        <InsertImageButton />
+        <InsertURLButton icon="image" />
+        <InsertURLButton icon="link" />
       </Toolbar>
       <Editable
         renderElement={renderElement}
@@ -70,11 +71,23 @@ const RichTextExample = () => {
   )
 }
 
-const withImages = editor => {
-  const { insertData, isVoid } = editor
+const withAction = editor => {
+  const { insertData, isVoid, insertText, isInline } = editor
 
   editor.isVoid = element => {
     return element.type === 'image' ? true : isVoid(element)
+  }
+
+  editor.isInline = element => {
+    return element.type === 'link' ? true : isInline(element)
+  }
+
+  editor.insertText = text => {
+    if (text && isUrl(text)) {
+      wrapLink(editor, text)
+    } else {
+      insertText(text)
+    }
   }
 
   editor.insertData = data => {
@@ -97,12 +110,44 @@ const withImages = editor => {
       }
     } else if (isImageUrl(text)) {
       insertImage(editor, text)
+    } else if (text && isUrl(text)) {
+      wrapLink(editor, text)
     } else {
       insertData(data)
     }
   }
 
   return editor
+}
+
+const unwrapLink = editor => {
+  Transforms.unwrapNodes(editor, { match: n => n.type === 'link' })
+}
+
+const isLinkActive = editor => {
+  const [link] = Editor.nodes(editor, { match: n => n.type === 'link' })
+  return !!link
+}
+
+const wrapLink = (editor, url) => {
+  if (isLinkActive(editor)) {
+    unwrapLink(editor)
+  }
+
+  const { selection } = editor
+  const isCollapsed = selection && Range.isCollapsed(selection)
+  const link = {
+    type: 'link',
+    url,
+    children: isCollapsed ? [{ text: url }] : [],
+  }
+
+  if (isCollapsed) {
+    Transforms.insertNodes(editor, link)
+  } else {
+    Transforms.wrapNodes(editor, link, { split: true })
+    Transforms.collapse(editor, { edge: 'end' })
+  }
 }
 
 const isImageUrl = url => {
@@ -170,6 +215,12 @@ const Element = ({ attributes, children, element }) => {
       return <ol {...attributes}>{children}</ol>
     case 'image':
       return <ImageElement {...{ attributes, children, element }} />
+    case 'link':
+      return (
+        <a {...attributes} href={element.url}>
+          {children}
+        </a>
+      )
     default:
       return <p {...attributes}>{children}</p>
   }
@@ -231,7 +282,7 @@ const BlockButton = ({ format, icon }) => {
   )
 }
 
-const InsertImageButton = () => {
+const InsertURLButton = ({ icon }) => {
   const editor = useSlate()
   return (
     <Button
@@ -239,12 +290,18 @@ const InsertImageButton = () => {
         event.preventDefault()
         const url = window.prompt('Enter the URL of the image:')
         if (!url) return
-        insertImage(editor, url)
+        icon === 'image' ? insertImage(editor, url) : insertLink(editor, url)
       }}
     >
-      <Icon>image</Icon>
+      <Icon>{icon}</Icon>
     </Button>
   )
+}
+
+const insertLink = (editor, url) => {
+  if (editor.selection) {
+    wrapLink(editor, url)
+  }
 }
 
 const insertImage = (editor, url) => {
